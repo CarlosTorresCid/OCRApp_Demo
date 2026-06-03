@@ -27,7 +27,6 @@ android/app/debug/
 build/
 .flutter-plugins
 .flutter-plugins-dependencies
-pubspec.lock
 
 # ── Plataformas — ephemeral / generados ───────────────────────────────────────
 linux/flutter/ephemeral/
