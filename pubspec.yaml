@@ -1,0 +1,104 @@
+name: ocr_albaranes_tfg_demo
+description: Aplicación académica de digitalización asistida de albaranes mediante OCR (TFG).
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.5 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # HTTP client con interceptores
+  dio: ^5.7.0
+
+  # Gestión de estado
+  flutter_riverpod: ^2.6.1
+
+  # Selección de archivos
+  file_picker: ^8.0.0
+
+  # Procesamiento de imagen
+  image: ^4.5.4
+
+  # ML Kit para captura Android
+  google_mlkit_document_scanner: ^0.4.0
+
+  # Visor PDF web
+  syncfusion_flutter_pdfviewer: ^24.1.41
+
+  # Grid editable para líneas de albarán
+  syncfusion_flutter_datagrid: ^24.1.41
+
+  # Widgets de UI
+  dotted_border: ^2.1.0
+  flutter_typeahead: ^5.2.0
+
+  # UUID para IDs de documentos
+  uuid: ^4.5.1
+
+  # Internacionalización
+  intl: ^0.19.0
+
+  # Acceso a directorio temporal (path_provider)
+  path_provider: ^2.1.5
+  path: ^1.8.3
+
+  # Información del dispositivo
+  device_info_plus: ^9.1.2
+
+  # Preferencias (para estado temporal)
+  shared_preferences: ^2.0.7
+
+  # Íconos Material
+  cupertino_icons: ^1.0.2
+  flutter_svg: ^2.0.9
+
+  # Camera (mobile)
+  camera: ^0.11.0+2
+
+  # Tipografía Inter (Google Fonts)
+  google_fonts: ^6.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/logo.png"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/images/logo.png"
+    background_color: "#2563EB"
+    theme_color: "#2563EB"
+  windows:
+    generate: true
+    image_path: "assets/images/logo.png"
+    icon_size: 48
+  macos:
+    generate: true
+    image_path: "assets/images/logo.png"
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: Lato
+      fonts:
+        - asset: assets/fonts/Lato-Regular.ttf
+        - asset: assets/fonts/Lato-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Lato-Italic.ttf
+          style: italic
+
+  assets:
+    - assets/images/

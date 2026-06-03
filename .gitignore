@@ -1,0 +1,79 @@
+# ── Credenciales y secretos — NUNCA en el repositorio ───────────────────────
+.env
+.env.*
+*.jks
+*.keystore
+*.pem
+*.p12
+*.pfx
+*.cer
+*.crt
+key.properties
+credentials.json
+service-account*.json
+google-services.json
+GoogleService-Info.plist
+.dev.vars
+.wrangler/
+
+# ── Android ──────────────────────────────────────────────────────────────────
+android/local.properties
+android/keystore/
+android/.gradle/
+android/app/debug/
+
+# ── Flutter — generados ───────────────────────────────────────────────────────
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# ── Plataformas — ephemeral / generados ───────────────────────────────────────
+linux/flutter/ephemeral/
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+windows/flutter/ephemeral/
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugin_registrant.h
+windows/flutter/generated_plugins.cmake
+macos/Flutter/ephemeral/
+macos/Flutter/GeneratedPluginRegistrant.swift
+ios/.symlinks/
+ios/Pods/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# ── BFF (Cloudflare Worker) ───────────────────────────────────────────────────
+bff/node_modules/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Sistema ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Build artifacts ──────────────────────────────────────────────────────────
+.build/
+dist/
+node_modules/
+target/
+
+# Claude / Claude Code
+.claude/
+.claudeignore
+CLAUDE.md
+**/CLAUDE.md
+**/.claude/

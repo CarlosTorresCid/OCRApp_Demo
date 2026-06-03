@@ -1,0 +1,20 @@
+name = "ocr-albaranes-tfg-bff"
+main = "src/index.js"
+compatibility_date = "2024-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Variables públicas (no secretos)
+[vars]
+APP_ENV = "production"
+
+# Secrets — ejecutar tras el despliegue con wrangler secret put:
+#
+#   wrangler secret put DOCUMENT_AI_URL
+#   → URL completa del procesador Document AI, por ejemplo:
+#     https://eu-documentai.googleapis.com/v1/projects/MI_PROYECTO/locations/eu/processors/MI_PROCESADOR:process
+#
+#   wrangler secret put GCP_SERVICE_ACCOUNT_JSON
+#   → Contenido JSON del service account de Google Cloud con permisos
+#     roles/documentai.apiUser sobre el procesador
+#
+# IMPORTANTE: Nunca incluyas estos valores en este archivo ni en el frontend.
