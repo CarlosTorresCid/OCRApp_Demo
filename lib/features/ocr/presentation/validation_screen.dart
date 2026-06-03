@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,7 +11,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../domain/entities/ocr_document.dart';
 import '../providers/ocr_provider.dart';
-import 'widgets/pdf_viewer_widget.dart' show OriginalPdfViewer, PdfPageMetrics;
+import 'widgets/pdf_viewer_widget.dart' show OriginalPdfViewer;
 import '../utils/json_export_service.dart';
 import '../../../utils/app_snackbar.dart';
 
@@ -567,6 +566,8 @@ class _ValidationScreenState extends ConsumerState<ValidationScreen>
 // VISOR DE DOCUMENTO CON TOOLBAR Y ZOOM
 // ══════════════════════════════════════════════════════════════════════════════
 
+enum _FitMode { fitWidth, manualZoom }
+
 class _DocViewer extends StatefulWidget {
   final OcrDocument doc;
   final OcrAlbaranResult? ocrResult;
@@ -585,13 +586,17 @@ class _DocViewer extends StatefulWidget {
 class _DocViewerState extends State<_DocViewer> {
   Uint8List? _imageBytes;
   bool _loadingImage = true;
-  bool _previewLogged = false; // imprime los logs PREVIEW solo una vez por doc
+  bool _previewLogged = false;
 
-  double _scale = 1.0;
-  BoxConstraints _vpConstraints = const BoxConstraints(maxWidth: 800, maxHeight: 600);
+  _FitMode _fitMode = _FitMode.fitWidth;
+  double _manualZoomPx = 500.0;  // renderWidth en px cuando está en manualZoom
+  double _pageWidthLogical = 0.0;  // ancho lógico de página (0 = desconocido)
+  double _pageHeightLogical = 0.0;
+  bool _pageWidthKnown = false;
+  double _nativePdfZoom = 1.0;   // zoom actual en visor nativo
+  double _lastLoggedWidth = 0.0; // para log de resize
 
   PdfViewerController? _pdfCtrl;
-  PdfPageMetrics? _pdfMetrics; // dimensiones del PDF (actualizadas via onMetricsChanged)
 
   bool get _isPdf {
     if (widget.doc.mimeType == 'application/pdf') return true;
@@ -609,8 +614,27 @@ class _DocViewerState extends State<_DocViewer> {
   @override
   void initState() {
     super.initState();
-    if (!kIsWeb) _pdfCtrl = PdfViewerController(); // creado para todos los nativos; solo se usa si _isNativePdf
+    final isPdfByMime = widget.doc.mimeType == 'application/pdf' ||
+        widget.doc.fileName?.toLowerCase().endsWith('.pdf') == true;
+
+    // Pre-inicializar ancho de página para imágenes (disponible sin carga async)
+    if (!isPdfByMime) {
+      final w = widget.doc.width?.toDouble() ?? 0.0;
+      final h = widget.doc.height?.toDouble() ?? 0.0;
+      if (w > 0) {
+        _pageWidthLogical = w;
+        _pageHeightLogical = h;
+        _pageWidthKnown = true;
+      }
+    }
+
+    if (!kIsWeb) _pdfCtrl = PdfViewerController();
     _loadImage();
+
+    debugPrint('[VIEWER_TRACE][INIT] '
+        'fileName=${widget.doc.fileName ?? "?"} '
+        'type=${isPdfByMime ? "pdf" : "image"} '
+        'initialMode=fitWidth');
   }
 
   @override
@@ -620,8 +644,6 @@ class _DocViewerState extends State<_DocViewer> {
   }
 
   Future<void> _loadImage() async {
-    // Los PDF (todas las plataformas) los gestiona OriginalPdfViewer internamente.
-    // Solo decodificamos bytes para imágenes.
     if (widget.doc.mimeType == 'application/pdf' ||
         widget.doc.fileName?.toLowerCase().endsWith('.pdf') == true) {
       if (mounted) setState(() => _loadingImage = false);
@@ -638,11 +660,10 @@ class _DocViewerState extends State<_DocViewer> {
       final b64 = raw.contains(',') ? raw.split(',').last : raw;
       final bytes = base64Decode(b64);
 
-      // Comprobación de seguridad: nunca intentar Image.memory con PDF
       if (_hasPdfMagicBytes(bytes)) {
         debugPrint('[DOC_TRACE][PREVIEW] WARN: bytes son PDF pero mimeType=${widget.doc.mimeType} — redirigiendo a visor PDF');
         if (mounted) setState(() => _loadingImage = false);
-        return; // _imageBytes queda null; _isPdf detectará la firma y usará OriginalPdfViewer
+        return;
       }
 
       if (mounted) {
@@ -680,130 +701,179 @@ class _DocViewerState extends State<_DocViewer> {
     );
   }
 
-  void _zoomIn() {
+  // ── Cálculo de renderWidth ─────────────────────────────────────────────────
+
+  double _renderWidth(double availableW) {
+    const pad = 32.0;
+    final base = (availableW - pad).clamp(50.0, double.infinity);
+    return _fitMode == _FitMode.fitWidth
+        ? base
+        : _manualZoomPx.clamp(50.0, double.infinity);
+  }
+
+  double _displayPct(double renderW) {
+    if (_isNativePdf) return _nativePdfZoom * 100.0;
+    if (_pageWidthLogical <= 0) return 100.0;
+    return (renderW / _pageWidthLogical * 100.0).clamp(1.0, 9999.0);
+  }
+
+  void _handleResize(double newW) {
+    if ((newW - _lastLoggedWidth).abs() < 5.0) return;
+    final recalc = _fitMode == _FitMode.fitWidth;
+    if (recalc && _pageWidthLogical > 0) {
+      final rw = (newW - 32.0).clamp(50.0, double.infinity);
+      final scale = rw / _pageWidthLogical;
+      final rendH = _pageHeightLogical > 0
+          ? (rw * _pageHeightLogical / _pageWidthLogical).toStringAsFixed(1)
+          : '?';
+      debugPrint('[VIEWER_TRACE][FIT_WIDTH] '
+          'viewportWidth=${newW.toStringAsFixed(1)} '
+          'pageWidth=${_pageWidthLogical.toStringAsFixed(1)} '
+          'pageHeight=${_pageHeightLogical.toStringAsFixed(1)} '
+          'scale=${scale.toStringAsFixed(3)} '
+          'renderedWidth=${rw.toStringAsFixed(1)} '
+          'renderedHeight=$rendH');
+    }
+    debugPrint('[VIEWER_TRACE][RESIZE] '
+        'oldViewportWidth=${_lastLoggedWidth.toStringAsFixed(1)} '
+        'newViewportWidth=${newW.toStringAsFixed(1)} '
+        'mode=${_fitMode.name} '
+        'recalculated=$recalc');
+    _lastLoggedWidth = newW;
+  }
+
+  // ── Zoom ───────────────────────────────────────────────────────────────────
+
+  void _zoomIn(double availableW) {
+    final prevMode = _fitMode;
     if (_isNativePdf && _pdfCtrl != null) {
       final next = (_pdfCtrl!.zoomLevel * 1.25).clamp(0.5, 4.0);
       _pdfCtrl!.zoomLevel = next;
-      setState(() => _scale = next);
-    } else {
-      _setScale(_scale * 1.25);
+      setState(() { _fitMode = _FitMode.manualZoom; _nativePdfZoom = next; });
+      debugPrint('[VIEWER_TRACE][MODE] from=${prevMode.name} to=manualZoom reason=zoomIn');
+      debugPrint('[VIEWER_TRACE][ZOOM] mode=manualZoom zoom=${(next * 100).toStringAsFixed(0)}% renderedWidth=n/a');
+      return;
     }
+    final current = _renderWidth(availableW);
+    final next = (current * 1.25).clamp(50.0, double.infinity);
+    setState(() { _fitMode = _FitMode.manualZoom; _manualZoomPx = next; });
+    debugPrint('[VIEWER_TRACE][MODE] from=${prevMode.name} to=manualZoom reason=zoomIn');
+    debugPrint('[VIEWER_TRACE][ZOOM] mode=manualZoom zoom=${_displayPct(next).toStringAsFixed(0)}% renderedWidth=${next.toStringAsFixed(1)}');
   }
 
-  void _zoomOut() {
+  void _zoomOut(double availableW) {
+    final prevMode = _fitMode;
     if (_isNativePdf && _pdfCtrl != null) {
       final next = (_pdfCtrl!.zoomLevel * 0.8).clamp(0.5, 4.0);
       _pdfCtrl!.zoomLevel = next;
-      setState(() => _scale = next);
-    } else {
-      _setScale(_scale * 0.8);
+      setState(() { _fitMode = _FitMode.manualZoom; _nativePdfZoom = next; });
+      debugPrint('[VIEWER_TRACE][MODE] from=${prevMode.name} to=manualZoom reason=zoomOut');
+      debugPrint('[VIEWER_TRACE][ZOOM] mode=manualZoom zoom=${(next * 100).toStringAsFixed(0)}% renderedWidth=n/a');
+      return;
     }
-  }
-
-  void _fitPage() {
-    if (_isNativePdf && _pdfCtrl != null) {
-      _pdfCtrl!.zoomLevel = 1.0;
-      setState(() => _scale = 1.0);
-    } else if (_isPdf && _pdfMetrics != null) {
-      // Web PDF: las dimensiones vienen de pdf.js en px a 2x
-      final logicalW = _pdfMetrics!.pageWidthPts / 2.0;
-      final logicalH = _pdfMetrics!.pageHeightPts / 2.0;
-      // scale=1 en web muestra el PDF ajustado al ancho del visor (containerW).
-      // Para fit-page: queremos que logicalH * s == vpH (si portrait),
-      // expresado en términos de containerW: scale = vpH * logicalW / (containerW * logicalH)
-      // (pero no puede superar 1.0 si la página ya cabe)
-      final containerW = _vpConstraints.maxWidth;
-      final vpH = _vpConstraints.maxHeight;
-      final aspect = logicalH > 0 ? logicalW / logicalH : 1.0;
-      final heightAtScale1 = containerW / aspect; // altura mostrada a scale=1
-      final s = (vpH / heightAtScale1).clamp(0.1, 2.0);
-      _setScale(s);
-    } else if (!_isPdf) {
-      // Imagen
-      final imgW = (widget.doc.width ?? 800).toDouble();
-      final imgH = (widget.doc.height ?? 1000).toDouble();
-      final s = math.min(
-        _vpConstraints.maxWidth / imgW,
-        _vpConstraints.maxHeight / imgH,
-      ).clamp(0.1, 5.0);
-      _setScale(s);
-    } else {
-      _setScale(1.0);
-    }
+    final current = _renderWidth(availableW);
+    final next = (current * 0.8).clamp(50.0, double.infinity);
+    setState(() { _fitMode = _FitMode.manualZoom; _manualZoomPx = next; });
+    debugPrint('[VIEWER_TRACE][MODE] from=${prevMode.name} to=manualZoom reason=zoomOut');
+    debugPrint('[VIEWER_TRACE][ZOOM] mode=manualZoom zoom=${_displayPct(next).toStringAsFixed(0)}% renderedWidth=${next.toStringAsFixed(1)}');
   }
 
   void _fitWidth() {
+    final prevMode = _fitMode;
     if (_isNativePdf && _pdfCtrl != null) {
       _pdfCtrl!.zoomLevel = 1.0;
-      setState(() => _scale = 1.0);
-    } else if (_isPdf) {
-      // Para web PDF: scale=1.0 ya equivale a fit-width (imagen llena el contenedor)
-      _setScale(1.0);
-    } else {
-      // Imagen
-      final imgW = (widget.doc.width ?? 800).toDouble();
-      final s = (_vpConstraints.maxWidth / imgW).clamp(0.1, 5.0);
-      _setScale(s);
+      setState(() { _fitMode = _FitMode.fitWidth; _nativePdfZoom = 1.0; });
+      debugPrint('[VIEWER_TRACE][MODE] from=${prevMode.name} to=fitWidth reason=fitWidthButton');
+      return;
     }
+    setState(() => _fitMode = _FitMode.fitWidth);
+    debugPrint('[VIEWER_TRACE][MODE] from=${prevMode.name} to=fitWidth reason=fitWidthButton');
   }
 
-  void _setScale(double newScale) {
-    setState(() => _scale = newScale.clamp(0.1, 5.0));
-  }
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final doc = widget.doc;
-    return Column(
-      children: [
-        // ── Toolbar ─────────────────────────────────────────────────────
-        _ViewerToolbar(
-          doc: doc,
-          scale: _scale,
-          onZoomIn: _zoomIn,
-          onZoomOut: _zoomOut,
-          onFitPage: _fitPage,
-          onFitWidth: _fitWidth,
-        ),
-        Container(height: 0.5, color: AppColors.divider),
-        // ── Contenido del visor ─────────────────────────────────────────
-        Expanded(
-          child: Container(
-            color: AppColors.viewerBg,
-            child: _loadingImage
-                ? const Center(child: CircularProgressIndicator(
-                    color: AppColors.primary, strokeWidth: 2))
-                : LayoutBuilder(
-                    builder: (_, constraints) {
-                      _vpConstraints = constraints;
-                      return _buildContent(doc, constraints);
-                    },
-                  ),
-          ),
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (_, constraints) {
+        final availableW = constraints.maxWidth;
+        _handleResize(availableW);
+        final renderW = _renderWidth(availableW);
+        final displayPct = _displayPct(renderW);
+
+        return Column(
+          children: [
+            _ViewerToolbar(
+              doc: doc,
+              displayPct: displayPct,
+              fitMode: _fitMode,
+              onZoomIn: () => _zoomIn(availableW),
+              onZoomOut: () => _zoomOut(availableW),
+              onFitWidth: _fitWidth,
+            ),
+            Container(height: 0.5, color: AppColors.divider),
+            Expanded(
+              child: Container(
+                color: AppColors.viewerBg,
+                child: _loadingImage
+                    ? const Center(child: CircularProgressIndicator(
+                        color: AppColors.primary, strokeWidth: 2))
+                    : _buildContent(doc, renderW, availableW),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildContent(OcrDocument doc, BoxConstraints constraints) {
+  Widget _buildContent(OcrDocument doc, double renderW, double availableW) {
     _logPreview(doc);
 
     // ── PDF (todas las plataformas) ──────────────────────────────────────────
     if (_isPdf) {
       debugPrint('[DOC_TRACE][PREVIEW_RENDER] branch=pdf '
-          'viewer=OriginalPdfViewer isNative=$_isNativePdf scale=$_scale');
+          'viewer=OriginalPdfViewer isNative=$_isNativePdf '
+          'fitMode=${_fitMode.name} renderW=${renderW.toStringAsFixed(1)}');
+
       return OriginalPdfViewer(
         base64: doc.imageBase64 ?? '',
-        scale: _scale,
+        renderWidth: renderW,
         externalController: _isNativePdf ? _pdfCtrl : null,
         onMetricsChanged: (m) {
           if (!mounted) return;
-          // Actualizar escala desde el controlador nativo
-          if (_isNativePdf && (m.zoomLevel - _scale).abs() > 0.005) {
-            setState(() => _scale = m.zoomLevel);
+          if (_isNativePdf) {
+            if ((m.zoomLevel - _nativePdfZoom).abs() > 0.005) {
+              setState(() => _nativePdfZoom = m.zoomLevel);
+            }
+            if (!_pageWidthKnown && m.pageWidthPts > 0) {
+              setState(() {
+                _pageWidthLogical = m.pageWidthPts;
+                _pageHeightLogical = m.pageHeightPts;
+                _pageWidthKnown = true;
+              });
+            }
+            return;
           }
-          // Guardar métricas para calcular fit-page / fit-width en web
-          setState(() => _pdfMetrics = m);
+          // Web: pdf.js renderiza a 2x → ancho lógico = pageWidthPts / 2
+          final logicalW = m.pageWidthPts / 2.0;
+          final logicalH = m.pageHeightPts / 2.0;
+          if (!_pageWidthKnown && logicalW > 0) {
+            setState(() {
+              _pageWidthLogical = logicalW;
+              _pageHeightLogical = logicalH;
+              _pageWidthKnown = true;
+              if (_manualZoomPx == 500.0) _manualZoomPx = renderW;
+            });
+            debugPrint('[VIEWER_TRACE][FIT_WIDTH] '
+                'viewportWidth=${availableW.toStringAsFixed(1)} '
+                'pageWidth=${logicalW.toStringAsFixed(1)} '
+                'pageHeight=${logicalH.toStringAsFixed(1)} '
+                'scale=${(renderW / logicalW).toStringAsFixed(3)} '
+                'renderedWidth=${renderW.toStringAsFixed(1)} '
+                'renderedHeight=${(renderW * logicalH / logicalW).toStringAsFixed(1)}');
+          }
         },
       );
     }
@@ -831,46 +901,60 @@ class _DocViewerState extends State<_DocViewer> {
       );
     }
 
-    // ── Imagen (JPG / PNG) — scroll bidireccional + escala ───────────────────
-    debugPrint('[DOC_TRACE][PREVIEW_RENDER] branch=image viewer=ScaledImageViewer scale=$_scale');
+    // ── Imagen (JPG / PNG) ───────────────────────────────────────────────────
+    debugPrint('[DOC_TRACE][PREVIEW_RENDER] branch=image '
+        'fitMode=${_fitMode.name} renderW=${renderW.toStringAsFixed(1)}');
+
     final imgW = (widget.doc.width ?? 800).toDouble();
     final imgH = (widget.doc.height ?? 1000).toDouble();
-    final scaledW = imgW * _scale;
-    final scaledH = imgH * _scale;
+    final scaledH = imgH > 0 && imgW > 0 ? renderW * imgH / imgW : renderW;
+    final needsHScroll = renderW + 32 > availableW + 1.0;
 
-    return Scrollbar(
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.vertical,
-        child: Scrollbar(
-          thumbVisibility: true,
-          notificationPredicate: (n) => n.depth == 1,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: SizedBox(
-                  width: scaledW,
-                  height: scaledH,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.memory(_imageBytes!, fit: BoxFit.fill),
-                      if (!doc.isManualReview && widget.ocrResult != null)
-                        _BBoxOverlay(
-                          ocrResult: widget.ocrResult!,
-                          selectedKey: widget.selectedKey,
-                        ),
-                    ],
-                  ),
+    final imageContent = Padding(
+      padding: const EdgeInsets.all(16),
+      child: Center(
+        child: SizedBox(
+          width: renderW,
+          height: scaledH,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.memory(_imageBytes!, fit: BoxFit.fill),
+              if (!doc.isManualReview && widget.ocrResult != null)
+                _BBoxOverlay(
+                  ocrResult: widget.ocrResult!,
+                  selectedKey: widget.selectedKey,
                 ),
-              ),
-            ),
+            ],
           ),
         ),
       ),
     );
+
+    if (needsHScroll) {
+      return Scrollbar(
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.vertical,
+          child: Scrollbar(
+            thumbVisibility: true,
+            notificationPredicate: (n) => n.depth == 1,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: imageContent,
+            ),
+          ),
+        ),
+      );
+    } else {
+      return Scrollbar(
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.vertical,
+          child: imageContent,
+        ),
+      );
+    }
   }
 }
 
@@ -878,18 +962,18 @@ class _DocViewerState extends State<_DocViewer> {
 
 class _ViewerToolbar extends StatelessWidget {
   final OcrDocument doc;
-  final double scale;
+  final double displayPct;
+  final _FitMode fitMode;
   final VoidCallback onZoomIn;
   final VoidCallback onZoomOut;
-  final VoidCallback onFitPage;
   final VoidCallback onFitWidth;
 
   const _ViewerToolbar({
     required this.doc,
-    required this.scale,
+    required this.displayPct,
+    required this.fitMode,
     required this.onZoomIn,
     required this.onZoomOut,
-    required this.onFitPage,
     required this.onFitWidth,
   });
 
@@ -898,7 +982,8 @@ class _ViewerToolbar extends StatelessWidget {
     final sizeLabel = doc.sizeBytes != null
         ? '${(doc.sizeBytes! / 1024).toStringAsFixed(0)} KB'
         : '';
-    final scalePct = '${(scale * 100).toStringAsFixed(0)}%';
+    final scalePct = '${displayPct.toStringAsFixed(0)}%';
+    final isFitWidth = fitMode == _FitMode.fitWidth;
 
     return Container(
       height: 36,
@@ -906,7 +991,6 @@ class _ViewerToolbar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          // Nombre y metadatos
           Expanded(
             child: Text(
               [
@@ -920,7 +1004,6 @@ class _ViewerToolbar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          // Controles de zoom
           _ToolbarBtn(icon: Icons.remove, onTap: onZoomOut,
               tooltip: 'Reducir zoom'),
           Padding(
@@ -941,9 +1024,11 @@ class _ViewerToolbar extends StatelessWidget {
           const SizedBox(width: 4),
           Container(width: 0.5, height: 18, color: AppColors.border),
           const SizedBox(width: 4),
-          _ToolbarTextBtn(label: 'Ajustar página', onTap: onFitPage),
-          const SizedBox(width: 2),
-          _ToolbarTextBtn(label: 'Ajustar ancho', onTap: onFitWidth),
+          _ToolbarTextBtn(
+            label: 'Ajustar ancho',
+            onTap: onFitWidth,
+            isActive: isFitWidth,
+          ),
         ],
       ),
     );
@@ -974,20 +1059,32 @@ class _ToolbarBtn extends StatelessWidget {
 class _ToolbarTextBtn extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
-  const _ToolbarTextBtn({required this.label, required this.onTap});
+  final bool isActive;
+  const _ToolbarTextBtn({
+    required this.label,
+    required this.onTap,
+    this.isActive = false,
+  });
 
   @override
   Widget build(BuildContext context) => InkWell(
     onTap: onTap,
     borderRadius: BorderRadius.circular(4),
-    child: Padding(
+    child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: isActive
+          ? BoxDecoration(
+              color: AppColors.primary.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(4),
+            )
+          : null,
       child: Text(
         label,
         style: GoogleFonts.inter(
-            fontSize: 11,
-            color: AppColors.primary,
-            fontWeight: FontWeight.w500),
+          fontSize: 11,
+          color: AppColors.primary,
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+        ),
       ),
     ),
   );

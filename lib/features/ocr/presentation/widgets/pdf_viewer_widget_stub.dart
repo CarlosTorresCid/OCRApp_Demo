@@ -12,18 +12,17 @@ class OriginalPdfViewer extends StatefulWidget {
   final ValueChanged<PdfPageMetrics>? onMetricsChanged;
   /// Controlador externo opcional para zoom/scroll (SfPdfViewer).
   final PdfViewerController? externalController;
-  /// Factor de escala de visualización.
-  /// En esta implementación nativa el zoom lo gestiona SfPdfViewer mediante
-  /// [externalController]; este parámetro existe por paridad de API con la
-  /// versión web y se ignora aquí.
-  final double scale;
+  /// Ancho de renderizado solicitado por el padre.
+  /// En esta implementación nativa SfPdfViewer gestiona su propio layout;
+  /// este parámetro existe por paridad de API con la versión web y se ignora.
+  final double renderWidth;
 
   const OriginalPdfViewer({
     super.key,
     required this.base64,
     this.onMetricsChanged,
     this.externalController,
-    this.scale = 1.0,
+    this.renderWidth = 600.0,
   });
 
   @override
@@ -77,7 +76,6 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer>
   void dispose() {
     debugPrint('[PDF_VIEWER] dispose');
     _stopScrollPolling();
-    // Solo dispone el controlador si es de nuestra propiedad (no externo)
     if (widget.externalController == null) _controller.dispose();
     super.dispose();
   }
@@ -85,11 +83,7 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer>
   void _decodePdf() {
     if (widget.base64.isEmpty) {
       debugPrint('[PDF_VIEWER] decodePdf: base64 empty');
-
-      setState(() {
-        _bytes = null;
-        _error = 'PDF no disponible';
-      });
+      setState(() { _bytes = null; _error = 'PDF no disponible'; });
       return;
     }
 
@@ -102,55 +96,37 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer>
         '[PDF_VIEWER] decodePdf: header=${bytes.length >= 4 ? String.fromCharCodes(bytes.take(4)) : "short"}',
       );
 
-      setState(() {
-        _bytes = bytes;
-        _error = null;
-      });
+      setState(() { _bytes = bytes; _error = null; });
     } catch (e, st) {
       debugPrint('[PDF_VIEWER] decodePdf: invalid PDF/base64');
       debugPrint('[PDF_VIEWER] decodePdf error=$e');
       debugPrint('[PDF_VIEWER] decodePdf stack=$st');
-
-      setState(() {
-        _bytes = null;
-        _error = 'PDF inválido';
-      });
+      setState(() { _bytes = null; _error = 'PDF inválido'; });
     }
   }
 
   void _startScrollPolling() {
     debugPrint('[PDF_VIEWER] startScrollPolling');
-
     _scrollTicker ??= createTicker((_) {
       final currentOffset = _controller.scrollOffset;
-
       if (currentOffset != _lastScrollOffset) {
         _lastScrollOffset = currentOffset;
         debugPrint('[PDF_VIEWER] scrollOffset changed=$currentOffset');
         _emitMetrics();
       }
     });
-
-    if (!_scrollTicker!.isActive) {
-      _scrollTicker!.start();
-    }
+    if (!_scrollTicker!.isActive) _scrollTicker!.start();
   }
 
   void _stopScrollPolling() {
-    if (_scrollTicker != null) {
-      debugPrint('[PDF_VIEWER] stopScrollPolling');
-    }
-
+    if (_scrollTicker != null) debugPrint('[PDF_VIEWER] stopScrollPolling');
     _scrollTicker?.dispose();
     _scrollTicker = null;
   }
 
   void _emitMetrics() {
     if (_pageWidthPts == null || _pageHeightPts == null) {
-      debugPrint(
-        '[PDF_VIEWER] emitMetrics skipped: page size is null '
-        'width=$_pageWidthPts height=$_pageHeightPts',
-      );
+      debugPrint('[PDF_VIEWER] emitMetrics skipped: page size is null');
       return;
     }
 
@@ -178,74 +154,47 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer>
   Widget build(BuildContext context) {
     if (_error != null) {
       debugPrint('[PDF_VIEWER] build: showing error=$_error');
-
       return Center(
-        child: Text(
-          _error!,
-          style: const TextStyle(fontSize: 13, color: Colors.black54),
-          textAlign: TextAlign.center,
-        ),
+        child: Text(_error!,
+            style: const TextStyle(fontSize: 13, color: Colors.black54),
+            textAlign: TextAlign.center),
       );
     }
 
     final bytes = _bytes;
     if (bytes == null) {
       debugPrint('[PDF_VIEWER] build: bytes null, showing loader');
-
       return const Center(child: CircularProgressIndicator());
     }
 
-    debugPrint('[PDF_VIEWER] build: rendering SfPdfViewer.memory');
-    debugPrint('[PDF_VIEWER] build: bytesLength=${bytes.length}');
-    debugPrint(
-      '[PDF_VIEWER] build: header=${bytes.length >= 4 ? String.fromCharCodes(bytes.take(4)) : "short"}',
-    );
+    debugPrint('[PDF_VIEWER] build: rendering SfPdfViewer.memory bytesLength=${bytes.length}');
 
     return SfPdfViewer.memory(
       bytes,
       controller: _controller,
       onDocumentLoaded: (PdfDocumentLoadedDetails details) {
         debugPrint('[PDF_VIEWER] onDocumentLoaded');
-
         final document = details.document;
         _pageCount = document.pages.count;
-
-        debugPrint('[PDF_VIEWER] pageCount=$_pageCount');
-
         if (_pageCount > 0) {
-          final firstPageSize = document.pages[0].size;
-          _pageWidthPts = firstPageSize.width;
-          _pageHeightPts = firstPageSize.height;
-
-          debugPrint(
-            '[PDF_VIEWER] firstPageSize=${firstPageSize.width}x${firstPageSize.height}',
-          );
+          final size = document.pages[0].size;
+          _pageWidthPts = size.width;
+          _pageHeightPts = size.height;
+          debugPrint('[PDF_VIEWER] firstPageSize=${size.width}x${size.height}');
         }
-
         _zoomLevel = _controller.zoomLevel;
         _lastScrollOffset = _controller.scrollOffset;
-
-        debugPrint(
-          '[PDF_VIEWER] initial zoom=$_zoomLevel scroll=${_controller.scrollOffset}',
-        );
-
         _emitMetrics();
         _startScrollPolling();
       },
       onDocumentLoadFailed: (PdfDocumentLoadFailedDetails details) {
-        debugPrint('[PDF_VIEWER] onDocumentLoadFailed');
-        debugPrint('[PDF_VIEWER] error=${details.error}');
-        debugPrint('[PDF_VIEWER] description=${details.description}');
+        debugPrint('[PDF_VIEWER] onDocumentLoadFailed error=${details.error}');
       },
       onPageChanged: (PdfPageChangedDetails details) {
-        debugPrint('[PDF_VIEWER] onPageChanged=${details.newPageNumber}');
-
         _pageNumber = details.newPageNumber;
         _emitMetrics();
       },
       onZoomLevelChanged: (PdfZoomDetails details) {
-        debugPrint('[PDF_VIEWER] onZoomLevelChanged=${details.newZoomLevel}');
-
         _zoomLevel = details.newZoomLevel;
         _emitMetrics();
       },
@@ -275,9 +224,7 @@ class PdfPageMetrics {
     return pageWidthPts / pageHeightPts;
   }
 
-  double renderedWidth(double viewportWidth) {
-    return viewportWidth * zoomLevel;
-  }
+  double renderedWidth(double viewportWidth) => viewportWidth * zoomLevel;
 
   double renderedHeight(double viewportWidth) {
     if (pageWidthPts == 0) return viewportWidth;

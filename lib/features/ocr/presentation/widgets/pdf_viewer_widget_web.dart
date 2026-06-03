@@ -11,29 +11,26 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart'
 import '../../utils/base64_utils.dart';
 
 /// Visor PDF para Flutter Web.
-/// Renderiza la primera página del PDF como imagen PNG mediante pdf.js,
-/// a continuación muestra la imagen escalada dentro de un visor con scroll
-/// bidireccional.  El parámetro [scale] controla el tamaño de visualización:
-///   - scale = 1.0 → ajusta el PDF al ancho del contenedor (fit-width)
-///   - scale > 1.0 → amplía (aparece scroll horizontal)
-///   - scale < 1.0 → reduce
+/// Renderiza la primera página del PDF como imagen PNG mediante pdf.js.
+/// [renderWidth] es el ancho en píxeles lógicos al que debe dibujarse la imagen.
+/// El padre (DocViewerState) calcula este valor según el modo activo:
+///   - fitWidth  → renderWidth = panelWidth − 32 (padding)
+///   - manualZoom → renderWidth = valor fijo elegido por el usuario
+/// Cuando renderWidth supera el ancho del contenedor se activa scroll horizontal.
 class OriginalPdfViewer extends StatefulWidget {
   final String base64;
   final ValueChanged<PdfPageMetrics>? onMetricsChanged;
   /// Aceptado por compatibilidad de API con la implementación nativa.
-  /// En web el PDF se renderiza como imagen PNG (pdf.js), por lo que
-  /// PdfViewerController no se utiliza funcionalmente aquí.
   final PdfViewerController? externalController;
-  /// Factor de escala de visualización.
-  /// 1.0 = ajustar al ancho del contenedor.
-  final double scale;
+  /// Ancho de renderizado en píxeles lógicos.
+  final double renderWidth;
 
   const OriginalPdfViewer({
     super.key,
     required this.base64,
     this.onMetricsChanged,
     this.externalController,
-    this.scale = 1.0,
+    this.renderWidth = 600.0,
   });
 
   @override
@@ -45,8 +42,8 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer> {
   String? _error;
   bool _loading = true;
 
-  double? _pageWidth;   // Ancho del PNG renderizado en px
-  double? _pageHeight;  // Alto del PNG renderizado en px
+  double? _pageWidth;   // Ancho del PNG renderizado en px (a 2x DPR)
+  double? _pageHeight;  // Alto del PNG renderizado en px (a 2x DPR)
   int _pageCount = 1;
 
   @override
@@ -61,7 +58,7 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer> {
     if (oldWidget.base64 != widget.base64) {
       _renderPdf();
     }
-    // scale se lee directamente de widget.scale en build(), no requiere re-render.
+    // renderWidth se lee en build(); no requiere re-render del PDF.
   }
 
   Future<void> _renderPdf() async {
@@ -72,8 +69,10 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer> {
     }
 
     if (!mounted) return;
-    setState(() { _imageBytes = null; _error = null; _loading = true;
-                  _pageWidth = null; _pageHeight = null; _pageCount = 1; });
+    setState(() {
+      _imageBytes = null; _error = null; _loading = true;
+      _pageWidth = null; _pageHeight = null; _pageCount = 1;
+    });
 
     try {
       final normalized = normalizeBase64Payload(widget.base64);
@@ -128,13 +127,13 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer> {
     final metrics = PdfPageMetrics(
       pageWidthPts: w,
       pageHeightPts: h,
-      zoomLevel: widget.scale,
+      zoomLevel: 1.0,  // el padre calcula la escala real; aquí no es significativo
       scrollOffset: Offset.zero,
       pageNumber: 1,
       pageCount: _pageCount,
     );
 
-    debugPrint('[PDF_WEB] emitMetrics: size=${w}x$h scale=${widget.scale}');
+    debugPrint('[PDF_WEB] emitMetrics: pngSize=${w}x$h (logicalSize=${w / 2}x${h / 2})');
     widget.onMetricsChanged?.call(metrics);
   }
 
@@ -159,39 +158,47 @@ class _OriginalPdfViewerState extends State<OriginalPdfViewer> {
       );
     }
 
-    // Scroll bidireccional + imagen escalada
     return LayoutBuilder(
       builder: (_, constraints) {
         final containerW = constraints.maxWidth;
-        // scale=1.0 → fit-width (imagen llena el contenedor)
-        // scale≠1.0 → ancho explícito (puede requerir scroll horizontal)
-        final displayW = widget.scale != 1.0
-            ? (containerW * widget.scale).clamp(100.0, double.infinity)
-            : double.infinity;
-        final useExplicitW = widget.scale != 1.0;
+        final rw = widget.renderWidth.clamp(50.0, double.infinity);
+        // Necesita scroll horizontal solo si la imagen supera el panel
+        final needsHScroll = rw + 32 > containerW + 1.0;
 
-        return Scrollbar(
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.vertical,
-            child: Scrollbar(
-              thumbVisibility: true,
-              notificationPredicate: (n) => n.depth == 1,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Image.memory(
-                    bytes,
-                    width: useExplicitW ? displayW : null,
-                    fit: useExplicitW ? BoxFit.none : BoxFit.fitWidth,
-                    gaplessPlayback: true,
-                  ),
+        final imageWidget = Padding(
+          padding: const EdgeInsets.all(16),
+          child: Image.memory(
+            bytes,
+            width: rw,
+            fit: BoxFit.fill,  // siempre ancho explícito, aspect ratio mantenido por height
+            gaplessPlayback: true,
+          ),
+        );
+
+        if (needsHScroll) {
+          return Scrollbar(
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.vertical,
+              child: Scrollbar(
+                thumbVisibility: true,
+                notificationPredicate: (n) => n.depth == 1,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: imageWidget,
                 ),
               ),
             ),
-          ),
-        );
+          );
+        } else {
+          return Scrollbar(
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.vertical,
+              child: Center(child: imageWidget),
+            ),
+          );
+        }
       },
     );
   }
