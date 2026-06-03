@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    base href reemplazado por Flutter build con --base-href.
+    Debe empezar y terminar con "/" para funcionar correctamente.
+  -->
+  <base href="/OCRApp_Demo/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="OCR Albaranes TFG Demo — Digitalización asistida mediante OCR">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="OCR Albaranes TFG Demo">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon y manifest -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>OCR Albaranes TFG Demo</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- PDF.js — necesario para renderizar PDFs en Flutter Web -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+
+  <script type="text/javascript">
+    if (typeof pdfjsLib !== "undefined") {
+      window.pdfjsLib = pdfjsLib;
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js";
+    }
+  </script>
+
+  <!-- Función de renderizado PDF → PNG que usa el visor Flutter Web -->
+  <script type="text/javascript">
+    window.renderPdfPageToPngDataUrl = async function(base64, scale) {
+      const pdfjs = window.pdfjsLib;
+
+      if (!pdfjs) {
+        throw new Error("pdfjsLib no está disponible. Revisa los scripts de pdf.js en index.html.");
+      }
+
+      const raw = atob(base64.split(",").pop());
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) {
+        bytes[i] = raw.charCodeAt(i);
+      }
+
+      const loadingTask = pdfjs.getDocument({ data: bytes });
+      const pdf = await loadingTask.promise;
+
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: scale || 2.0 });
+
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+      return {
+        dataUrl: canvas.toDataURL("image/png"),
+        width: viewport.width,
+        height: viewport.height,
+        pageCount: pdf.numPages
+      };
+    };
+  </script>
+
+  <!--
+    Bootstrap estándar de Flutter Web.
+    flutter_bootstrap.js es generado automáticamente por `flutter build web`
+    y `flutter run -d chrome`. No debe crearse manualmente.
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</head>
+<body>
+</body>
+</html>
